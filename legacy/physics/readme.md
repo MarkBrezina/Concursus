@@ -1,3 +1,9 @@
+This package was originally named #Galaksim
+As the focus was mostly on galaxy simulations. The few pieces I made for particle swarm simulations are buried somewhere else and I will add them later on. 
+the more up to date notebooks and python files will also be added later. Here is the original readme for that package.
+
+
+
 # Galaksim
 Galaksim is a Python-based galaxy simulation project designed to model and visualize various aspects of galactic physics. Utilizing Jupyter Notebooks and Python scripts, the project aims to provide interactive simulations that can aid in understanding the dynamics and structures of galaxies.
 
