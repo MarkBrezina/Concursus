@@ -1,0 +1,182 @@
+Metadata-Version: 2.4
+Name: stochastics
+Version: 0.3.0
+Summary: Research toolkit for stochastic and many-body systems: particle physics simulations with composition-driven collisions, an exact energy ledger, and a policy lab for designing interaction laws.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.24
+Requires-Dist: scipy>=1.10
+Requires-Dist: pandas>=2.0
+Requires-Dist: matplotlib>=3.7
+Provides-Extra: notebook
+Requires-Dist: ipython; extra == "notebook"
+Requires-Dist: jupyter; extra == "notebook"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+
+# stochastics
+
+A research toolkit for stochastic and many-body systems. This release ships the first subpackage,
+**`stochastics.physics`**: a classical particle simulator with gravity and electromagnetism,
+composition-driven collisions, an energy ledger that audits every run, one-call dashboards, 2D/3D
+animation, and an open **policy lab** for designing interaction laws instead of assuming them.
+
+![Two rotating clusters colliding in 3D](docs/galaxies_3d.gif)
+
+```python
+from dataclasses import replace
+import stochastics
+from stochastics import physics
+from stochastics.physics import *
+
+# 1. particles: explicit clusters from any (editable) preset
+astro_cfg = replace(PRESETS['astro'], radius_mean=0.003, radius_std=0.0008, velocity_std=0.03)
+particles = ParticleSystem.random(
+    n=400, preset=astro_cfg, seed=210, dimension=3,
+    clusters=[Cluster(mean=[-3.5, -1, 0], std=[1, 1, 0.15], orbital_G=1e-4, velocity=[0.2, 0.12, 0]),
+              Cluster(mean=[3.5, 1, 0.3], std=[0.8, 0.8, 0.12], orbital_G=1e-4, velocity=[-0.2, -0.12, 0],
+                      rotation=[0.4, 0, -1], weight=0.8)])
+particles[0]            # Particle(id=0, mass=..., charge=..., spin=..., polarity=..., energy=..., composition={+:4, -:2}, ...)
+particles[0].mass = 120 # live view: writes straight into the arrays
+
+# 2. environment: law + rules + background
+env = Environment(law=Gravity(G=1e-4, softening=0.12),
+                  rules=[Collisions(CompositionAffinity()), Drag(gamma=0.0)],
+                  expansion=None)
+
+# 3. time loop
+result = simulate(particles, env, steps=3200, dt=0.01, record_every=20)
+
+# 4. plots and animations, separately
+report(result)                        # summary table + 12-panel dashboard
+animate_2d(result, max_frames=100)    # 3D runs are projected (plane='xy' | 'xz' | 'yz')
+animate_3d(result, max_frames=100)
+```
+
+## Install and run
+
+Install once in *editable* mode; `import stochastics` then works from any folder or notebook, and edits
+to the source are picked up on the next kernel restart (no reinstall needed, also for new modules).
+From a notebook cell (installs into the kernel's own environment):
+
+```python
+%pip install -e "C:\Users\Mark Brezina\Stock\stochastics-lab"
+```
+
+or from a terminal in the project folder:
+
+```bash
+pip install -e ".[notebook,dev]"
+pytest -q                                   # 26 invariant / equivalence tests, ~6 s
+```
+
+Requires Python ≥ 3.10, NumPy, SciPy, pandas, Matplotlib. Re-run the install only if the project
+folder is moved or renamed.
+
+## Layout
+
+```
+stochastics/
+├── __init__.py         import stochastics; subpackages load on first use
+├── baseline/           baseline stochastic processes (processes.py)   — stub
+├── finance/            finance setups, limit order book (lob.py)       — stub
+├── popdyn/             population dynamics (models.py)                 — stub
+└── physics/
+    ├── state.py        Particle, ParticleView, Cluster, ParticleSystem, EnergyLedger, waveform
+    ├── presets.py      classical / quantum / em / macro / astro population presets
+    ├── forces.py       one pairwise kernel engine → Gravity, Coulomb, any coupling × kernel
+    ├── mechanics.py    merge / bounce / emit — the only code that changes momentum or energy
+    ├── collisions.py   swept-sphere contact detection, Outcome, CompositionAffinity, Collisions
+    ├── environment.py  Environment, Rule, Drag, SpaceExpansion, PolarityClock
+    ├── engine.py       simulate(), SimulationResult, recording and diagnostics
+    ├── plotting.py     plot_initial, plot_dashboard, report, plot_collision_regimes, ...
+    ├── animation.py    animate_2d, animate_3d (HTML player, .gif/.mp4 export)
+    └── policies/       the lab: ExternalPolicy, InternalPolicy, clocks, examples
+```
+
+## Design
+
+**Policies decide, mechanics conserve.** A collision policy only returns an `Outcome`: *merge*,
+*bounce with restitution e*, or *pass*. `mechanics.merge/bounce/emit` execute it and conserve mass,
+charge, linear momentum and constituent counts exactly, booking every unit of energy. New rules can be
+wrong about physics without silently breaking the bookkeeping.
+
+**One pairwise kernel.** Every central law is `U_ij = C_ij · φ(r)`, `F_i = Σ_j C_ij · g(r) · (x_i − x_j)`.
+A law supplies only the coupling matrix `C` (gravity `−G m_i m_j`, Coulomb `k q_i q_j`, a policy
+`−strength · affinity`); the kernel (`Plummer`, `Gaussian`, `Yukawa`, `Spring`) supplies the profile. Forces
+and the matching potential come out of one chunked pass (O(N²) time, O(chunk·N) memory), and laws that
+share a kernel are fused into a single pass.
+
+**An energy ledger that closes.**
+
+| channel | what it holds |
+|---|---|
+| `kinetic`, `potential`, `internal` | state of the particles (internal = collision heat stored in each particle's `energy`) |
+| `radiated` | energy carried away by radiation in mergers / inelastic contacts |
+| `dissipated` | energy given to the medium by drag |
+| `binding` | potential-energy jumps from discrete events (a merger removes a pair term) |
+| `expansion` | potential-energy change caused by background expansion |
+| `drive` | energy pumped in or out by internal clocks / policies |
+
+`accounted_energy` (the sum) is flat to integrator precision: the residual shrinks ~4× when `dt` halves.
+The engine books these automatically: any rule that moves particles or changes charges calls
+`state.touch()`, and the engine re-evaluates the potential and charges the difference to that rule's channel.
+
+**Collisions as a gradient.** Each particle is built from sub-particles (`composition`, e.g. 3 `+` and 2 `−`).
+`CompositionAffinity` computes how strongly A's parts attract B's parts:
+
+1. affinity `w = (c_A · K · c_B) / (n_A n_B)` ∈ [−1, 1]
+2. restitution `e = e_min + (e_max − e_min)(1 − w)/2` — repulsive interiors bounce elastically, attractive ones stick
+3. after a bounce the pair keeps `K' = K_rel − (1 − e²)·½μv_n²`
+4. binding at contact `B = −U_law(A,B) + w·½μ·bond_speed²` (long-range law + short-range part bonds)
+5. `K' < B` → **merge**, else **bounce** (elastic if e = 1, inelastic otherwise)
+
+![Collision outcome map](docs/collision_regimes.png)
+
+Contacts are found along each particle's straight path over the step (swept spheres), so fast particles
+cannot tunnel through each other; the pair is rewound to the moment of contact, resolved, and re-advanced.
+
+## Policy lab
+
+```python
+from stochastics.physics.policies import *
+
+policy_external = OppositesAttract(strength=0.05)   # who is drawn to whom
+policy_internal = InternalPolicy()                  # clocks, contacts, merging, emission
+
+result = simulate(particles, external=policy_external, internal=policy_internal,
+                  rules=[Drag(0.3)], steps=3000, dt=0.01, record_every=25)
+```
+
+* **Clocks.** `spin` (θ-like speed) and `polarity` (charge-like amplitude) drive
+  `polarity_now = polarity · waveform(phase)`, `phase += spin·dt/4`. With polarity −1, spin 0.5, dt 1 the
+  triangle waveform gives −1, −0.5, 0, 0.5, 1, 0.5, 0, −0.5, −1, … A particle's `energy` remains its internal
+  energy reservoir, so the ledger keeps closing.
+* **External policies** override one method, `affinity(a, b) → matrix` (positive = attract).
+  `ElectromagneticPolicy()` reproduces `Coulomb` bit-for-bit and `GravitationalPolicy()` reproduces `Gravity`,
+  so any new idea can be benchmarked against known physics in the same engine. `reciprocal=False` allows
+  non-reciprocal (agent-like) interactions such as chase/evade.
+* **Internal policies** override `evolve` (per step), `decide` (per contact) and `combine` (merged state).
+  `ThermalEmission` is a worked example: collisions heat particles, hot composites emit their least-bound
+  constituent with recoil, and other particles absorb it.
+
+## Validation (`pytest -q`)
+
+Force = −∇U by finite differences; Gravity/Coulomb against an independent reference implementation;
+EM/gravity policies equal the built-in laws; mass, charge, momentum and constituents exact under 3D
+collisions; accounted energy exact for pure mergers and second-order convergent with forces; drag and
+expansion ledgers; `d(t) = d₀e^{Ht}` for expansion; elastic bounces swap velocities; the composition
+gradient (elastic → inelastic → merge, and the speed dependence of capture); swept-sphere detection prevents
+tunnelling; emission conserves everything; the polarity clock reproduces the specified sequence.
+
+## Scope and limits
+
+* Dimensionless toy units. Presets named `quantum` / `astro` are parameter regimes, not quantum mechanics or
+  cosmology. `SpaceExpansion` is a homogeneous stretch, not FLRW.
+* Pairwise forces are O(N²): comfortable to ~1–2k particles in a notebook. Barnes–Hut or a GPU kernel is the
+  next step for larger N.
+* Each particle takes part in at most one contact per step; simultaneous multi-body contacts resolve over
+  consecutive steps. Mergers conserve linear momentum but do not track the spin angular momentum the pair's
+  orbital motion would become.
+* Explicitly time-dependent laws are allowed, but put time-dependence in particle state updated by a rule
+  (as the clocks do) if you want the ledger to stay exact.
