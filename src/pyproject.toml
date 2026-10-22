@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stochastics"
+version = "0.5.0"
+description = "Research toolkit for stochastic and many-body systems: particle physics simulations with composition-driven collisions, an exact energy ledger, and a policy lab for designing interaction laws."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10", "pandas>=2.0", "matplotlib>=3.7"]
+
+[project.optional-dependencies]
+notebook = ["ipython", "jupyter"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["stochastics*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
